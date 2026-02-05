@@ -9,6 +9,9 @@ const designationOptions = [
   { value: 'WRIT', label: 'WRIT (Writing)' },
   { value: 'COEX', label: 'COEX (Community)' },
   { value: 'DIAP', label: 'DIAP (Diversity)' },
+  { value: 'FYS', label: 'FYS (First Year Seminar)' },
+  { value: 'SOPH', label: 'SOPH (Sophomore Seminar)' },
+  { value: 'CBLR', label: 'CBLR (Community-Based Learning)' },
 ];
 
 // Time grid constants
@@ -72,9 +75,11 @@ function courseFitsInTimeBlocks(course, selectedBlocks) {
 }
 
 function App() {
+  const PAGE_SIZE = 12;
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Filter state
   const [filters, setFilters] = useState({
@@ -150,6 +155,9 @@ function App() {
       results = results.filter(c => filters.formats.includes(c.format));
     }
 
+    // Exclude courses with TBA times
+    results = results.filter(c => c.time && !c.time.includes('TBA'));
+
     // Apply size filter
     if (filters.sizeCategory === 'small') {
       results = results.filter(c => c.size <= 25);
@@ -193,6 +201,23 @@ function App() {
 
     return results;
   }, [hasSearched, filters]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCourses.length / PAGE_SIZE));
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters, hasSearched]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const pagedCourses = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredCourses.slice(start, start + PAGE_SIZE);
+  }, [currentPage, filteredCourses, PAGE_SIZE]);
 
   // Update a single filter
   const updateFilter = (key, value) => {
@@ -469,7 +494,7 @@ function App() {
                 {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''} found
               </p>
               <div className="space-y-3">
-                {filteredCourses.map(course => (
+                {pagedCourses.map(course => (
                   <CourseCard
                     key={course.id}
                     course={course}
@@ -482,6 +507,13 @@ function App() {
                   </p>
                 )}
               </div>
+              {filteredCourses.length > 0 && (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={setCurrentPage}
+                />
+              )}
             </div>
           )}
 
@@ -498,7 +530,7 @@ function App() {
               Other results ({filteredCourses.length - 1})
             </p>
             <div className="space-y-2">
-              {filteredCourses
+              {pagedCourses
                 .filter(c => c.id !== selectedCourse.id)
                 .map(course => (
                   <CourseCardCompact
@@ -508,11 +540,112 @@ function App() {
                   />
                 ))}
             </div>
+            {filteredCourses.length > 0 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                compact
+              />
+            )}
           </aside>
         )}
       </main>
     </div>
   );
+}
+
+function Pagination({ currentPage, totalPages, onPageChange, compact }) {
+  if (totalPages <= 1) return null;
+
+  const canPrev = currentPage > 1;
+  const canNext = currentPage < totalPages;
+  const pages = buildPageItems(currentPage, totalPages);
+
+  return (
+    <div className={`mt-6 flex items-center justify-center gap-2 ${compact ? 'pt-3 border-t border-cream-300' : ''}`}>
+      <button
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={!canPrev}
+        className={`px-3 py-1.5 text-sm rounded border ${
+          canPrev
+            ? 'border-cream-400 text-warm-brownDark hover:border-warm-terracotta hover:text-warm-terracotta'
+            : 'border-cream-300 text-warm-brown/40 cursor-not-allowed'
+        }`}
+      >
+        Prev
+      </button>
+      <div className="flex flex-wrap gap-1.5">
+        {pages.map((item, idx) => {
+          if (item === 'ellipsis') {
+            return (
+              <span key={`ellipsis-${idx}`} className="px-2 py-1 text-sm text-warm-brown">
+                …
+              </span>
+            );
+          }
+
+          const isActive = item === currentPage;
+          return (
+            <button
+              key={item}
+              onClick={() => onPageChange(item)}
+              className={`min-w-8 px-2 py-1 text-sm rounded border transition-colors ${
+                isActive
+                  ? 'border-warm-terracotta bg-warm-terracotta text-cream-50'
+                  : 'border-cream-400 text-warm-brownDark hover:border-warm-terracotta hover:text-warm-terracotta'
+              }`}
+            >
+              {item}
+            </button>
+          );
+        })}
+      </div>
+      <button
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={!canNext}
+        className={`px-3 py-1.5 text-sm rounded border ${
+          canNext
+            ? 'border-cream-400 text-warm-brownDark hover:border-warm-terracotta hover:text-warm-terracotta'
+            : 'border-cream-300 text-warm-brown/40 cursor-not-allowed'
+        }`}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
+function buildPageItems(currentPage, totalPages) {
+  const items = [];
+  const pushPage = (page) => {
+    items.push(page);
+  };
+
+  if (totalPages <= 7) {
+    for (let i = 1; i <= totalPages; i++) pushPage(i);
+    return items;
+  }
+
+  pushPage(1);
+
+  if (currentPage > 4) {
+    items.push('ellipsis');
+  }
+
+  const start = Math.max(2, currentPage - 1);
+  const end = Math.min(totalPages - 1, currentPage + 1);
+
+  for (let i = start; i <= end; i++) {
+    pushPage(i);
+  }
+
+  if (currentPage < totalPages - 3) {
+    items.push('ellipsis');
+  }
+
+  pushPage(totalPages);
+  return items;
 }
 
 // Time Picker Modal Component
