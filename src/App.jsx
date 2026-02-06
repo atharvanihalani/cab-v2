@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { courses } from './data/courses';
-import { getDepartmentsForQuery, allDepartments } from './data/topicMapping';
+
 
 // Get unique values for filter options
 const formats = [...new Set(courses.map(c => c.format))].filter(f => f !== 'Independent Study').sort();
@@ -74,10 +74,73 @@ function courseFitsInTimeBlocks(course, selectedBlocks) {
   return courseBlocks.every(block => selectedBlocks.has(block));
 }
 
+// Parse course code like "AFRI 1050E" → ["AFRI", 1050, "E"]
+function parseCourseCode(code) {
+  const match = code.match(/^([A-Z]+)\s*(\d+)([A-Z]*)$/);
+  if (!match) return [code, 0, ''];
+  return [match[1], parseInt(match[2]), match[3]];
+}
+
+// Compare two courses by code for sorting
+function compareCourseCode(a, b) {
+  const [deptA, numA, suffA] = parseCourseCode(a.code);
+  const [deptB, numB, suffB] = parseCourseCode(b.code);
+  if (deptA !== deptB) return deptA.localeCompare(deptB);
+  if (numA !== numB) return numA - numB;
+  return suffA.localeCompare(suffB);
+}
+
+// Tier 1: exact department or exact course code (flexible spacing)
+function matchesCourseCode(course, query) {
+  const q = query.toLowerCase().replace(/\s+/g, '');
+  const code = course.code.toLowerCase().replace(/\s+/g, '');
+  const dept = course.department.toLowerCase();
+  return q === dept || q === code;
+}
+
+// Tier 2: exact first/last/full instructor name match
+function matchesInstructor(course, query) {
+  if (!course.instructor) return false;
+  const q = query.toLowerCase().trim();
+  const full = course.instructor.toLowerCase();
+  if (q === full) return true;
+  const words = full.split(/\s+/);
+  return words.some(w => q === w);
+}
+
+// Core 4-tier ranking: code → instructor → title substring → description substring
+function rankCoursesByQuery(allCourses, query) {
+  const q = (query || '').trim();
+  if (!q) return [...allCourses].sort(compareCourseCode);
+
+  const qLower = q.toLowerCase();
+  const tier1 = [], tier2 = [], tier3 = [], tier4 = [];
+
+  for (const course of allCourses) {
+    if (matchesCourseCode(course, q)) {
+      tier1.push(course);
+    } else if (matchesInstructor(course, q)) {
+      tier2.push(course);
+    } else if (course.title.toLowerCase().includes(qLower)) {
+      tier3.push(course);
+    } else if (course.description.toLowerCase().includes(qLower)) {
+      tier4.push(course);
+    }
+  }
+
+  tier1.sort(compareCourseCode);
+  tier2.sort(compareCourseCode);
+  tier3.sort(compareCourseCode);
+  tier4.sort(compareCourseCode);
+
+  return [...tier1, ...tier2, ...tier3, ...tier4];
+}
+
 function App() {
   const PAGE_SIZE = 12;
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeQuery, setActiveQuery] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -102,63 +165,35 @@ function App() {
   // Time picker modal state
   const [timePickerOpen, setTimePickerOpen] = useState(false);
 
+  // Sort state
+  const [sortOption, setSortOption] = useState('relevance');
+
   // Selected course for detail view
   const [selectedCourse, setSelectedCourse] = useState(null);
 
   // Handle search submission
   const handleSearch = (e) => {
     e.preventDefault();
-    const query = searchQuery.trim();
-    if (!query) return;
-
-    // Determine departments from query
-    let matchedDepartments = [];
-
-    // Check if it's an exact department code (all caps, matches existing department)
-    const isExactDeptCode = query === query.toUpperCase() && departments.includes(query);
-
-    if (isExactDeptCode) {
-      // Exact department match
-      matchedDepartments = [query];
-    } else {
-      // Vibe/topic search - map to departments
-      matchedDepartments = getDepartmentsForQuery(query);
-      // Filter to only departments that exist in our course data
-      matchedDepartments = matchedDepartments.filter(d => departments.includes(d));
-    }
-
-    // Update filters with matched departments (replace existing)
-    setFilters(prev => ({
-      ...prev,
-      departments: matchedDepartments,
-    }));
-
-    // Clear search bar, show results
-    setSearchQuery('');
+    setActiveQuery(searchQuery.trim());
     setHasSearched(true);
     setSelectedCourse(null);
   };
 
-  // Filter courses based on sidebar filters only
+  // Rank by query, then filter by sidebar
   const filteredCourses = useMemo(() => {
     if (!hasSearched) return [];
 
-    let results = [...courses];
+    // Stage 1: Rank by search query
+    let results = rankCoursesByQuery(courses, activeQuery);
 
-    // Apply department filter
+    // Stage 2: Apply sidebar filters (preserves ranking order)
     if (filters.departments.length > 0) {
       results = results.filter(c => filters.departments.includes(c.department));
     }
-
-    // Apply format filter
     if (filters.formats.length > 0) {
       results = results.filter(c => filters.formats.includes(c.format));
     }
-
-    // Exclude courses with TBA times
     results = results.filter(c => c.time && !c.time.includes('TBA'));
-
-    // Apply size filter
     if (filters.sizeCategory === 'small') {
       results = results.filter(c => c.size <= 25);
     } else if (filters.sizeCategory === 'medium') {
@@ -166,47 +201,46 @@ function App() {
     } else if (filters.sizeCategory === 'large') {
       results = results.filter(c => c.size > 80);
     }
-
-    // Apply grad course filter
     if (filters.excludeGrad) {
       results = results.filter(c => c.level < 2000);
     }
-
-    // Apply modality filter
     if (filters.modality) {
       results = results.filter(c => c.modality === filters.modality);
     }
-
-    // Apply credit filter
     if (filters.credit) {
       results = results.filter(c => c.credit === filters.credit);
     }
-
-    // Exclude independent study by default (unless included)
     if (!filters.includeIndependentStudy) {
       results = results.filter(c => !c.isIndependentStudy);
     }
-
-    // Apply designations filter (course must have ALL selected designations)
     if (filters.designations.length > 0) {
       results = results.filter(c =>
         filters.designations.every(d => c.designations.includes(d))
       );
     }
-
-    // Apply time filter (course must fit within selected time blocks)
     if (filters.timeBlocks.size > 0) {
       results = results.filter(c => courseFitsInTimeBlocks(c, filters.timeBlocks));
     }
 
+    // Stage 3: Apply sort (relevance = keep ranking order from stage 1)
+    if (sortOption === 'code-asc') {
+      results.sort(compareCourseCode);
+    } else if (sortOption === 'code-desc') {
+      results.sort((a, b) => compareCourseCode(b, a));
+    } else if (sortOption === 'size-asc') {
+      results.sort((a, b) => a.size - b.size);
+    } else if (sortOption === 'size-desc') {
+      results.sort((a, b) => b.size - a.size);
+    }
+
     return results;
-  }, [hasSearched, filters]);
+  }, [hasSearched, activeQuery, filters, sortOption]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCourses.length / PAGE_SIZE));
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters, hasSearched]);
+  }, [filters, hasSearched, activeQuery, sortOption]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -252,8 +286,10 @@ function App() {
   // Reset to home
   const goHome = () => {
     setSearchQuery('');
+    setActiveQuery('');
     setHasSearched(false);
     setSelectedCourse(null);
+    setSortOption('relevance');
     clearFilters();
   };
 
@@ -468,9 +504,8 @@ function App() {
                   <button
                     key={suggestion}
                     onClick={() => {
-                      // Map vibe to departments and set filters
-                      const matchedDepts = getDepartmentsForQuery(suggestion).filter(d => departments.includes(d));
-                      setFilters(prev => ({ ...prev, departments: matchedDepts }));
+                      setSearchQuery(suggestion);
+                      setActiveQuery(suggestion);
                       setHasSearched(true);
                     }}
                     className="px-3 py-1 bg-cream-200 text-warm-brown text-sm rounded-full hover:bg-cream-300 transition-colors"
@@ -490,9 +525,34 @@ function App() {
                 onChange={setSearchQuery}
                 onSubmit={handleSearch}
               />
-              <p className="text-sm text-warm-brown mt-4 mb-4">
-                {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''} found
-              </p>
+              <div className="flex items-center justify-between mt-4 mb-4">
+                <p className="text-sm text-warm-brown">
+                  {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''} found
+                </p>
+                <div className="flex items-center gap-1 text-sm">
+                  <span className="text-warm-brown/70">Sort by</span>
+                  <button
+                    onClick={() => setSortOption('relevance')}
+                    className={`px-0.5 transition-colors ${sortOption === 'relevance' ? 'text-warm-brownDark font-medium border-b-[1.5px] border-warm-brownDark' : 'text-warm-brown/70 hover:text-warm-terracotta border-b border-dashed border-transparent hover:border-warm-terracotta'}`}
+                  >
+                    Relevance
+                  </button>
+                  <span className="text-cream-400 mx-0.5">·</span>
+                  <button
+                    onClick={() => setSortOption(prev => prev === 'code-desc' ? 'code-asc' : 'code-desc')}
+                    className={`px-0.5 transition-colors ${sortOption.startsWith('code') ? 'text-warm-brownDark font-medium border-b-[1.5px] border-warm-brownDark' : 'text-warm-brown/70 hover:text-warm-terracotta border-b border-dashed border-transparent hover:border-warm-terracotta'}`}
+                  >
+                    Code {sortOption === 'code-asc' ? '↓' : sortOption === 'code-desc' ? '↑' : ''}
+                  </button>
+                  <span className="text-cream-400 mx-0.5">·</span>
+                  <button
+                    onClick={() => setSortOption(prev => prev === 'size-desc' ? 'size-asc' : 'size-desc')}
+                    className={`px-0.5 transition-colors ${sortOption.startsWith('size') ? 'text-warm-brownDark font-medium border-b-[1.5px] border-warm-brownDark' : 'text-warm-brown/70 hover:text-warm-terracotta border-b border-dashed border-transparent hover:border-warm-terracotta'}`}
+                  >
+                    Size {sortOption === 'size-asc' ? '↓' : sortOption === 'size-desc' ? '↑' : ''}
+                  </button>
+                </div>
+              </div>
               <div className="space-y-3">
                 {pagedCourses.map(course => (
                   <CourseCard
@@ -809,7 +869,7 @@ function SearchBar({ value, onChange, onSubmit, large }) {
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Search topics, vibes, or department codes..."
+        placeholder="Search courses, instructors, or codes..."
         className={`w-full bg-cream-50 border border-cream-400 rounded-lg text-warm-brownDark placeholder-warm-brown/50 focus:outline-none focus:ring-2 focus:ring-warm-terracotta focus:border-transparent ${large ? 'px-5 py-4 text-lg' : 'px-4 py-2.5'}`}
       />
       <button
