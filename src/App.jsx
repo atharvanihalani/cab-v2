@@ -331,9 +331,9 @@ function App() {
   const state = !hasSearched ? 'home' : selectedCourse ? 'detail' : 'results';
 
   return (
-    <div className="min-h-screen bg-cream-100 flex">
+    <div className="h-screen bg-cream-100 flex overflow-hidden">
       {/* Left Sidebar - Filters */}
-      <aside className="w-72 bg-cream-200 border-r border-cream-400 p-5 flex-shrink-0">
+      <aside className="w-72 bg-cream-200 border-r border-cream-400 p-5 flex-shrink-0 overflow-y-auto">
         <h1
           className="text-xl font-semibold text-warm-brownDark mb-6 cursor-pointer hover:text-warm-terracotta transition-colors"
           onClick={goHome}
@@ -499,9 +499,9 @@ function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex">
+      <main className="flex-1 flex min-w-0">
         {/* Center Panel */}
-        <div className={`flex-1 p-6 ${state === 'detail' ? 'border-r border-cream-300' : ''}`}>
+        <div className={`flex-1 p-6 overflow-y-auto ${state === 'detail' ? 'border-r border-cream-300' : ''}`}>
           {/* Back button in detail view */}
           {state === 'detail' && (
             <button
@@ -616,7 +616,7 @@ function App() {
 
         {/* Right Sidebar - Compact Results (only in detail view) */}
         {state === 'detail' && (
-          <aside className="w-80 bg-cream-50 p-4 overflow-y-auto flex-shrink-0">
+          <aside className="w-80 bg-cream-50 p-4 overflow-y-auto flex-shrink-0 no-scrollbar">
             <p className="text-sm text-warm-brown mb-3">
               Other results ({filteredCourses.length - 1})
             </p>

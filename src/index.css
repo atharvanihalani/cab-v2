@@ -24,3 +24,11 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #C4B8A5;
 }
+
+/* Hide scrollbar on right sidebar */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
