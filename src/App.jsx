@@ -202,6 +202,9 @@ function App() {
   // Sort state
   const [sortOption, setSortOption] = useState('relevance');
 
+  // Time picker anchor ref for fixed positioning
+  const timePickerAnchorRef = useRef(null);
+
   // Selected course for detail view
   const [selectedCourse, setSelectedCourse] = useState(null);
 
@@ -333,7 +336,7 @@ function App() {
   return (
     <div className="h-screen bg-cream-100 flex overflow-hidden">
       {/* Left Sidebar - Filters */}
-      <aside className="w-72 bg-cream-200 border-r border-cream-400 p-5 flex-shrink-0 overflow-y-auto">
+      <aside className="w-72 bg-cream-200 border-r border-cream-400 p-5 flex-shrink-0 overflow-y-auto z-10">
         <h1
           className="text-xl font-semibold text-warm-brownDark mb-6 cursor-pointer hover:text-warm-terracotta transition-colors"
           onClick={goHome}
@@ -351,9 +354,10 @@ function App() {
             />
 
             {/* Time Filter */}
-            <div className="relative">
+            <div>
               <h3 className="text-sm font-medium text-warm-brownDark mb-2">Class Time</h3>
               <button
+                ref={timePickerAnchorRef}
                 onClick={() => setTimePickerOpen(true)}
                 className="w-full px-3 py-2 bg-cream-50 border border-cream-400 rounded text-sm text-left hover:border-warm-terracotta transition-colors flex items-center justify-between"
               >
@@ -376,6 +380,7 @@ function App() {
               {/* Time Picker Flyout */}
               {timePickerOpen && (
                 <TimePickerFlyout
+                  anchorRef={timePickerAnchorRef}
                   selectedBlocks={filters.timeBlocks}
                   onChange={(blocks) => updateFilter('timeBlocks', blocks)}
                   onClose={() => setTimePickerOpen(false)}
@@ -740,12 +745,16 @@ function buildPageItems(currentPage, totalPages) {
 }
 
 // Time Picker Flyout — drag-to-select ranges, MWF/TTh auto-linked
-function TimePickerFlyout({ selectedBlocks, onChange, onClose }) {
+function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
   // Internal blocks state — only pushed to parent on Enter
   const [blocks, setBlocks] = useState(() => new Set(selectedBlocks));
   // Drag state: which day column, start time index, current time index, select vs deselect
   const [drag, setDrag] = useState(null);
   const flyoutRef = useRef(null);
+
+  // Compute fixed position from anchor button (synchronous — no flicker)
+  const anchorRect = anchorRef?.current?.getBoundingClientRect();
+  const pos = anchorRect ? { top: anchorRect.top, left: anchorRect.right + 8 } : { top: 0, left: 0 };
 
   // Get the range of time indices between drag start and current position
   function getDragRange() {
@@ -861,8 +870,8 @@ function TimePickerFlyout({ selectedBlocks, onChange, onClose }) {
   return (
     <div
       ref={flyoutRef}
-      className="absolute left-full top-0 ml-2 z-50 bg-cream-100 rounded-lg shadow-lg border border-cream-400 overflow-hidden"
-      style={{ width: '340px' }}
+      className="fixed z-50 bg-cream-100 rounded-lg shadow-lg border border-cream-400 overflow-hidden"
+      style={{ width: '340px', top: pos.top, left: pos.left }}
     >
       {/* Header */}
       <div className="px-3 py-2 border-b border-cream-300 flex items-center justify-between bg-cream-200">
