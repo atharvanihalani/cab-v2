@@ -16,47 +16,81 @@ const designationOptions = [
 
 // Time grid constants
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+const DAY_SIBLINGS = { Mon: ['Wed', 'Fri'], Tue: ['Thu'], Wed: ['Mon', 'Fri'], Thu: ['Tue'], Fri: ['Mon', 'Wed'] };
 const DAY_MAP = { M: 'Mon', T: 'Tue', W: 'Wed', Th: 'Thu', F: 'Fri' };
 const TIME_SLOTS = [];
-for (let hour = 8; hour < 20; hour++) {
+for (let hour = 8; hour < 21; hour++) {
   TIME_SLOTS.push(`${hour}:00`);
   TIME_SLOTS.push(`${hour}:30`);
 }
 
-// Parse course time string like "MWF 10:00-10:50" or "TTh 1:00-2:20"
+// Convert 12h time like "4:00p" or 24h "16:00" to decimal hours (16.0)
+function parseTimeToHours(hourStr, minStr, suffix) {
+  let h = parseInt(hourStr);
+  const m = parseInt(minStr);
+  if (suffix) {
+    // 12-hour format with a/p suffix
+    if (suffix === 'p' && h !== 12) h += 12;
+    if (suffix === 'a' && h === 12) h = 0;
+  }
+  return h + (m >= 30 ? 0.5 : 0);
+}
+
+// Parse end time — round up to next 30-min boundary
+function parseEndTimeToHours(hourStr, minStr, suffix) {
+  let h = parseInt(hourStr);
+  const m = parseInt(minStr);
+  if (suffix) {
+    if (suffix === 'p' && h !== 12) h += 12;
+    if (suffix === 'a' && h === 12) h = 0;
+  }
+  return h + (m > 0 ? (m > 30 ? 1 : 0.5) : 0);
+}
+
+// Parse course time string — handles both "MWF 10:00-10:50" and "Th 4:00p-6:30p"
+// Also handles comma-separated: "MWF 10:00a-10:50a, TTh 1:00p-2:20p"
 function parseCourseTime(timeStr) {
   if (!timeStr || timeStr === 'TBA') return [];
 
-  const match = timeStr.match(/^([MTWThF]+)\s+(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/);
-  if (!match) return [];
-
-  const [, daysStr, startHour, startMin, endHour, endMin] = match;
-
-  // Parse days (handle "Th" as Thursday)
-  const days = [];
-  let i = 0;
-  while (i < daysStr.length) {
-    if (daysStr[i] === 'T' && daysStr[i + 1] === 'h') {
-      days.push('Thu');
-      i += 2;
-    } else if (DAY_MAP[daysStr[i]]) {
-      days.push(DAY_MAP[daysStr[i]]);
-      i++;
-    } else {
-      i++;
-    }
-  }
-
-  // Convert to 24-hour format and get all 30-min blocks
-  const startTime = parseInt(startHour) + (parseInt(startMin) >= 30 ? 0.5 : 0);
-  const endTime = parseInt(endHour) + (parseInt(endMin) > 0 ? (parseInt(endMin) > 30 ? 1 : 0.5) : 0);
-
   const blocks = [];
-  for (const day of days) {
-    for (let t = startTime; t < endTime; t += 0.5) {
-      const hour = Math.floor(t);
-      const min = (t % 1) === 0.5 ? '30' : '00';
-      blocks.push(`${day}-${hour}:${min}`);
+  // Split on comma for multi-part schedules
+  const parts = timeStr.split(',').map(s => s.trim());
+
+  for (const part of parts) {
+    // Match both formats: with or without a/p suffix
+    const match = part.match(/^([MTWThFSaSu]+)\s+(\d{1,2}):(\d{2})([ap]?)-(\d{1,2}):(\d{2})([ap]?)$/);
+    if (!match) continue;
+
+    const [, daysStr, sH, sM, sSuf, eH, eM, eSuf] = match;
+
+    // Parse days (handle "Th" as Thursday)
+    const days = [];
+    let i = 0;
+    while (i < daysStr.length) {
+      if (daysStr[i] === 'T' && daysStr[i + 1] === 'h') {
+        days.push('Thu');
+        i += 2;
+      } else if (daysStr[i] === 'S' && daysStr[i + 1] === 'a') {
+        i += 2; // skip Saturday
+      } else if (daysStr[i] === 'S' && daysStr[i + 1] === 'u') {
+        i += 2; // skip Sunday
+      } else if (DAY_MAP[daysStr[i]]) {
+        days.push(DAY_MAP[daysStr[i]]);
+        i++;
+      } else {
+        i++;
+      }
+    }
+
+    const startTime = parseTimeToHours(sH, sM, sSuf || null);
+    const endTime = parseEndTimeToHours(eH, eM, eSuf || null);
+
+    for (const day of days) {
+      for (let t = startTime; t < endTime; t += 0.5) {
+        const hour = Math.floor(t);
+        const min = (t % 1) === 0.5 ? '30' : '00';
+        blocks.push(`${day}-${hour}:${min}`);
+      }
     }
   }
 
@@ -343,10 +377,7 @@ function App() {
               {timePickerOpen && (
                 <TimePickerFlyout
                   selectedBlocks={filters.timeBlocks}
-                  onSave={(blocks) => {
-                    updateFilter('timeBlocks', blocks);
-                    setTimePickerOpen(false);
-                  }}
+                  onChange={(blocks) => updateFilter('timeBlocks', blocks)}
                   onClose={() => setTimePickerOpen(false)}
                 />
               )}
@@ -708,68 +739,130 @@ function buildPageItems(currentPage, totalPages) {
   return items;
 }
 
-// Time Picker Modal Component
-function TimePickerFlyout({ selectedBlocks, onSave, onClose }) {
-  const [blocks, setBlocks] = useState(new Set(selectedBlocks));
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragMode, setDragMode] = useState(null); // 'select' or 'deselect'
+// Time Picker Flyout — drag-to-select ranges, MWF/TTh auto-linked
+function TimePickerFlyout({ selectedBlocks, onChange, onClose }) {
+  // Internal blocks state — only pushed to parent on Enter
+  const [blocks, setBlocks] = useState(() => new Set(selectedBlocks));
+  // Drag state: which day column, start time index, current time index, select vs deselect
+  const [drag, setDrag] = useState(null);
   const flyoutRef = useRef(null);
 
-  const handleMouseDown = (blockId) => {
-    setIsDragging(true);
-    const newMode = blocks.has(blockId) ? 'deselect' : 'select';
-    setDragMode(newMode);
+  // Get the range of time indices between drag start and current position
+  function getDragRange() {
+    if (!drag) return { day: null, minIdx: -1, maxIdx: -1 };
+    const minIdx = Math.min(drag.startIdx, drag.currentIdx);
+    const maxIdx = Math.max(drag.startIdx, drag.currentIdx);
+    return { day: drag.day, minIdx, maxIdx };
+  }
 
-    const newBlocks = new Set(blocks);
-    if (newMode === 'select') {
-      newBlocks.add(blockId);
-    } else {
-      newBlocks.delete(blockId);
+  // Build block IDs for a range on a specific day
+  function rangeBlocks(day, minIdx, maxIdx) {
+    const ids = [];
+    for (let i = minIdx; i <= maxIdx; i++) {
+      ids.push(`${day}-${TIME_SLOTS[i]}`);
     }
+    return ids;
+  }
+
+  // Commit the drag range to internal blocks
+  function commitDrag(groupMode) {
+    if (!drag) return;
+    const { day, minIdx, maxIdx } = getDragRange();
+    const newBlocks = new Set(blocks);
+    const days = groupMode ? [day, ...DAY_SIBLINGS[day]] : [day];
+
+    for (const d of days) {
+      const ids = rangeBlocks(d, minIdx, maxIdx);
+      for (const id of ids) {
+        if (drag.mode === 'select') {
+          newBlocks.add(id);
+        } else {
+          newBlocks.delete(id);
+        }
+      }
+    }
+
     setBlocks(newBlocks);
+    setDrag(null);
+  }
+
+  const handleMouseDown = (day, timeIdx, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const blockId = `${day}-${TIME_SLOTS[timeIdx]}`;
+    const mode = blocks.has(blockId) ? 'deselect' : 'select';
+    setDrag({ day, startIdx: timeIdx, currentIdx: timeIdx, mode, singleDay: false });
   };
 
-  const handleMouseEnter = (blockId) => {
-    if (!isDragging) return;
-
-    const newBlocks = new Set(blocks);
-    if (dragMode === 'select') {
-      newBlocks.add(blockId);
-    } else {
-      newBlocks.delete(blockId);
-    }
-    setBlocks(newBlocks);
+  const handleMouseEnter = (day, timeIdx) => {
+    if (!drag || day !== drag.day) return;
+    setDrag(prev => ({ ...prev, currentIdx: timeIdx }));
   };
 
   const handleMouseUp = () => {
-    setIsDragging(false);
-    setDragMode(null);
+    if (drag) commitDrag(!drag.singleDay);
   };
 
-  // Handle click outside to close
+  // Escape = single day only, click outside = close, mouseup = commit
   useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape' && drag) {
+        e.preventDefault();
+        setDrag(prev => ({ ...prev, singleDay: true })); // dismiss ghosts, keep dragging
+      } else if (e.key === 'Escape') {
+        onClose();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        onChange(blocks);
+        onClose();
+      }
+    }
     function handleClickOutside(event) {
       if (flyoutRef.current && !flyoutRef.current.contains(event.target)) {
         onClose();
       }
     }
+    function handleGlobalMouseUp() {
+      if (drag) commitDrag(!drag.singleDay);
+    }
 
+    document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('mouseup', handleMouseUp);
-
+    document.addEventListener('mouseup', handleGlobalMouseUp);
     return () => {
+      document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
     };
-  }, [onClose]);
+  });
 
-  const clearAll = () => setBlocks(new Set());
+  // Determine cell visual state
+  function getCellState(day, timeIdx) {
+    const blockId = `${day}-${TIME_SLOTS[timeIdx]}`;
+    const isCommitted = blocks.has(blockId);
+
+    if (drag) {
+      const { day: dragDay, minIdx, maxIdx } = getDragRange();
+      const inRange = timeIdx >= minIdx && timeIdx <= maxIdx;
+
+      if (inRange && day === dragDay) {
+        return drag.mode === 'select' ? 'dragging' : 'deselecting';
+      }
+      if (inRange && !drag.singleDay && DAY_SIBLINGS[dragDay].includes(day)) {
+        return drag.mode === 'select' ? 'ghost' : 'ghost-deselect';
+      }
+    }
+
+    return isCommitted ? 'selected' : 'empty';
+  }
+
+  const isMWF = (day) => ['Mon', 'Wed', 'Fri'].includes(day);
 
   return (
     <div
       ref={flyoutRef}
       className="absolute left-full top-0 ml-2 z-50 bg-cream-100 rounded-lg shadow-lg border border-cream-400 overflow-hidden"
-      style={{ width: '420px' }}
+      style={{ width: '340px' }}
     >
       {/* Header */}
       <div className="px-3 py-2 border-b border-cream-300 flex items-center justify-between bg-cream-200">
@@ -785,50 +878,55 @@ function TimePickerFlyout({ selectedBlocks, onSave, onClose }) {
       </div>
 
       {/* Grid */}
-      <div className="p-3 overflow-auto max-h-80">
+      <div className="p-3">
         <div className="inline-block">
-          {/* Day headers */}
+          {/* Day headers with MWF/TTh color coding */}
           <div className="flex">
-            <div className="w-10 flex-shrink-0" /> {/* Empty corner */}
+            <div className="w-10 flex-shrink-0" />
             {DAYS.map(day => (
-              <div key={day} className="w-16 text-center text-xs font-medium text-warm-brownDark py-1">
+              <div key={day} className="w-14 text-center text-[11px] font-medium py-1 text-warm-terracotta">
                 {day}
               </div>
             ))}
           </div>
+          {/* Group indicator bars — MWF connected, TTh connected */}
+          <div className="flex ml-10 mb-1 gap-px">
+            <div className="w-14 h-0.5 rounded-l-full bg-warm-terracotta/30" />
+            <div className="w-14 h-0.5 bg-warm-terracotta/10" />
+            <div className="w-14 h-0.5 bg-warm-terracotta/30" />
+            <div className="w-14 h-0.5 bg-warm-terracotta/10" />
+            <div className="w-14 h-0.5 rounded-r-full bg-warm-terracotta/30" />
+          </div>
 
           {/* Time rows */}
           {TIME_SLOTS.map((time, timeIdx) => (
-            <div key={time} className="flex h-2.5">
-              {/* Time label - only show on the hour */}
-              <div className="w-10 flex-shrink-0 text-right pr-1 text-warm-brown leading-none">
+            <div key={time} className="flex h-3">
+              {/* Time label on the hour */}
+              <div className="w-10 flex-shrink-0 text-right pr-1.5 text-warm-brown leading-none">
                 {time.endsWith(':00') && (
-                  <span className="text-[10px] -mt-1 block">
+                  <span className="text-[10px] -mt-0.5 block">
                     {parseInt(time) <= 12 ? parseInt(time) : parseInt(time) - 12}
                     {parseInt(time) < 12 ? 'a' : 'p'}
                   </span>
                 )}
               </div>
 
-              {/* Day cells */}
               {DAYS.map(day => {
-                const blockId = `${day}-${time}`;
-                const isSelected = blocks.has(blockId);
-                const isHourStart = time.endsWith(':00');
+                const state = getCellState(day, timeIdx);
+
+                let bg = 'bg-cream-50 hover:bg-cream-200';
+                if (state === 'selected') bg = 'bg-warm-terracotta/35';
+                else if (state === 'dragging') bg = 'bg-warm-terracotta/25 ring-1 ring-inset ring-warm-terracotta/40';
+                else if (state === 'ghost') bg = 'bg-warm-terracotta/25';
+                else if (state === 'deselecting') bg = 'bg-red-200/40 ring-1 ring-inset ring-red-300/40';
+                else if (state === 'ghost-deselect') bg = 'bg-red-100/30';
 
                 return (
                   <div
-                    key={blockId}
-                    onMouseDown={(e) => {
-                      e.stopPropagation();
-                      handleMouseDown(blockId);
-                    }}
-                    onMouseEnter={() => handleMouseEnter(blockId)}
-                    className={`
-                      w-16 h-2.5 border-l border-r border-t border-cream-300 cursor-pointer select-none transition-colors
-                      ${timeIdx === TIME_SLOTS.length - 1 ? 'border-b' : ''}
-                      ${isSelected ? 'bg-warm-terracotta/40 hover:bg-warm-terracotta/50' : 'bg-cream-50 hover:bg-cream-200'}
-                    `}
+                    key={`${day}-${time}`}
+                    onMouseDown={(e) => handleMouseDown(day, timeIdx, e)}
+                    onMouseEnter={() => handleMouseEnter(day, timeIdx)}
+                    className={`w-14 h-3 border-l border-r border-t border-cream-300 cursor-pointer select-none transition-colors ${timeIdx === TIME_SLOTS.length - 1 ? 'border-b' : ''} ${bg}`}
                   />
                 );
               })}
@@ -839,21 +937,22 @@ function TimePickerFlyout({ selectedBlocks, onSave, onClose }) {
 
       {/* Footer */}
       <div className="px-3 py-2 border-t border-cream-300 flex items-center justify-between bg-cream-50">
-        <span className="text-xs text-warm-brown">
-          {blocks.size} blocks
+        <span className="text-[11px] text-warm-brown">
+          {blocks.size === 0 ? 'Drag to select · Esc for single day' : `${blocks.size} blocks · Esc for single day`}
         </span>
         <div className="flex gap-2">
           <button
-            onClick={clearAll}
-            className="px-2 py-1 text-xs text-warm-brown hover:text-warm-terracotta transition-colors"
+            onClick={() => { setBlocks(new Set()); onChange(new Set()); }}
+            disabled={blocks.size === 0}
+            className={`px-2 py-0.5 text-xs transition-colors ${blocks.size === 0 ? 'text-warm-brown/30 cursor-not-allowed' : 'text-warm-brown hover:text-warm-terracotta'}`}
           >
             Clear
           </button>
           <button
-            onClick={() => onSave(blocks)}
+            onClick={() => { onChange(blocks); onClose(); }}
             className="px-3 py-1 bg-warm-terracotta text-cream-50 rounded text-xs hover:bg-warm-terracottaDark transition-colors"
           >
-            Apply
+            Enter
           </button>
         </div>
       </div>
