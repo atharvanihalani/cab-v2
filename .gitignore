@@ -11,3 +11,5 @@ src/data/courses_final.json
 venv
 scripts/scrape_cab.py
 .vercel
+.playwright-mcp
+qa/

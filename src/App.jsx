@@ -7,8 +7,7 @@ const formats = [...new Set(courses.map(c => c.format))].filter(f => f !== 'Inde
 const departments = [...new Set(courses.map(c => c.department))].sort();
 const designationOptions = [
   { value: 'WRIT', label: 'WRIT (Writing)' },
-  { value: 'COEX', label: 'COEX (Community)' },
-  { value: 'DIAP', label: 'DIAP (Diversity)' },
+  { value: 'COEX', label: 'COEX (Collaborative Scholarly Experiences)' },
   { value: 'FYS', label: 'FYS (First Year Seminar)' },
   { value: 'SOPH', label: 'SOPH (Sophomore Seminar)' },
   { value: 'CBLR', label: 'CBLR (Community-Based Learning)' },
@@ -21,7 +20,6 @@ const DAY_MAP = { M: 'Mon', T: 'Tue', W: 'Wed', Th: 'Thu', F: 'Fri' };
 const TIME_SLOTS = [];
 for (let hour = 8; hour < 21; hour++) {
   TIME_SLOTS.push(`${hour}:00`);
-  TIME_SLOTS.push(`${hour}:30`);
 }
 
 // Convert 12h time like "4:00p" or 24h "16:00" to decimal hours (16.0)
@@ -142,32 +140,110 @@ function matchesInstructor(course, query) {
   return words.some(w => q === w);
 }
 
-// Core 4-tier ranking: code → instructor → title substring → description substring
+// Word-boundary check: "american" matches "American" but NOT "Mesoamerican"
+function hasWord(text, word) {
+  return new RegExp('\\b' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(text);
+}
+
+// Simple suffix stemmer — strips common endings to get a root for prefix matching
+function stem(word) {
+  if (word.length < 5) return word;
+  const suffixes = [
+    'ational', 'tional', 'ically',
+    'ical', 'tion', 'sion', 'ment', 'ness',
+    'ible', 'able', 'ious', 'eous',
+    'ful', 'less', 'ive', 'ous', 'ial',
+    'ing', 'ity', 'ies',
+    'al', 'ly', 'er', 'ed', 'es', 'ic',
+    'y', 's',
+  ];
+  for (const s of suffixes) {
+    if (word.endsWith(s) && (word.length - s.length) >= 5) {
+      return word.slice(0, -s.length);
+    }
+  }
+  return word;
+}
+
+// Check if stemmed root appears at a word boundary in text (prefix match)
+function hasStemMatch(text, word) {
+  const root = stem(word);
+  if (root.length < 3) return false;
+  return new RegExp('\\b' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(text);
+}
+
+// Department full names for tag-based matching
+const DEPT_NAMES = {
+  AFRI: 'Africana Studies', AMST: 'American Studies', ANTH: 'Anthropology',
+  APMA: 'Applied Mathematics', ARAB: 'Arabic', ARCH: 'Archaeology',
+  BIOL: 'Biology Biological Sciences', CHEM: 'Chemistry', CHIN: 'Chinese',
+  CLAS: 'Classics Classical Studies', COLT: 'Comparative Literature',
+  COST: 'Contemplative Studies', CSCI: 'Computer Science', DATA: 'Data Science',
+  EAST: 'East Asian Studies', ECON: 'Economics', EDUC: 'Education',
+  EEPS: 'Earth Environmental and Planetary Sciences', EGYT: 'Egyptology',
+  ENGL: 'English', ENGN: 'Engineering', ENVS: 'Environmental Studies',
+  ETHN: 'Ethnic Studies', FREN: 'French', GNSS: 'Gender and Sexuality Studies',
+  GREK: 'Greek', GRMN: 'German', HEBR: 'Hebrew',
+  HIAA: 'History of Art and Architecture', HISP: 'Hispanic Studies',
+  HIST: 'History', HMAN: 'Humanities', HNDI: 'Hindi',
+  IAPA: 'International and Public Affairs', ITAL: 'Italian', JAPN: 'Japanese',
+  JUDS: 'Judaic Studies', KREA: 'Korean',
+  LACA: 'Latin American and Caribbean Studies', LANG: 'Language Studies',
+  LATN: 'Latin', LING: 'Linguistics', LITR: 'Literary Arts',
+  MATH: 'Mathematics', MCM: 'Modern Culture and Media', MDVL: 'Medieval Studies',
+  MES: 'Middle East Studies', MUSC: 'Music',
+  NAIS: 'Native American and Indigenous Studies', NEUR: 'Neuroscience',
+  PHIL: 'Philosophy', PHP: 'Public Health', PHUM: 'Public Humanities',
+  PHYS: 'Physics', POLS: 'Political Science', PRSN: 'Persian',
+  RELS: 'Religious Studies', RUSS: 'Russian', SIGN: 'Sign Language',
+  SOC: 'Sociology', STS: 'Science Technology and Society',
+  TAPS: 'Theatre Arts and Performance Studies', URBN: 'Urban Studies',
+  VIET: 'Vietnamese', VISA: 'Visual Art',
+};
+
+// 8-tier ranking: code → instructor → title phrase → title words → desc phrase → desc words → cross-field → stemmed/dept
 function rankCoursesByQuery(allCourses, query) {
   const q = (query || '').trim();
   if (!q) return [...allCourses].sort(compareCourseCode);
 
   const qLower = q.toLowerCase();
-  const tier1 = [], tier2 = [], tier3 = [], tier4 = [];
+  const words = qLower.split(/\s+/).filter(w => w.length > 0);
+  const isMultiWord = words.length > 1;
+  const tier1 = [], tier2 = [], tier3a = [], tier3b = [], tier4a = [], tier4b = [], tier5 = [], tier6 = [];
 
   for (const course of allCourses) {
     if (matchesCourseCode(course, q)) {
       tier1.push(course);
     } else if (matchesInstructor(course, q)) {
       tier2.push(course);
-    } else if (course.title.toLowerCase().includes(qLower)) {
-      tier3.push(course);
-    } else if (course.description.toLowerCase().includes(qLower)) {
-      tier4.push(course);
+    } else {
+      const title = course.title.toLowerCase();
+      const desc = course.description.toLowerCase();
+      const combined = title + ' ' + desc;
+
+      if (title.includes(qLower)) {
+        tier3a.push(course);  // exact phrase in title
+      } else if (isMultiWord && words.every(w => hasWord(title, w))) {
+        tier3b.push(course);  // all words in title (word boundary)
+      } else if (desc.includes(qLower)) {
+        tier4a.push(course);  // exact phrase in description
+      } else if (isMultiWord && words.every(w => hasWord(desc, w))) {
+        tier4b.push(course);  // all words in description (word boundary)
+      } else if (isMultiWord && words.every(w => hasWord(combined, w))) {
+        tier5.push(course);   // all words across title + description
+      } else {
+        // Tier 6: stemmed matching against title + description + department full name
+        const deptName = (DEPT_NAMES[course.department] || '').toLowerCase();
+        const expanded = combined + ' ' + deptName;
+        if (words.every(w => hasStemMatch(expanded, w))) {
+          tier6.push(course);
+        }
+      }
     }
   }
 
-  tier1.sort(compareCourseCode);
-  tier2.sort(compareCourseCode);
-  tier3.sort(compareCourseCode);
-  tier4.sort(compareCourseCode);
-
-  return [...tier1, ...tier2, ...tier3, ...tier4];
+  [tier1, tier2, tier3a, tier3b, tier4a, tier4b, tier5, tier6].forEach(t => t.sort(compareCourseCode));
+  return [...tier1, ...tier2, ...tier3a, ...tier3b, ...tier4a, ...tier4b, ...tier5, ...tier6];
 }
 
 function App() {
@@ -182,12 +258,11 @@ function App() {
   const [filters, setFilters] = useState({
     departments: [],
     formats: [],
-    sizeCategory: null, // 'small' (≤25), 'medium' (26-80), 'large' (>80), or null (any)
+    sizeCategories: [], // ['small', 'medium', 'large'] — empty = no filter
     excludeGrad: true,
     // Advanced filters
     modality: null, // 'in-person', 'online', 'hybrid', or null (any)
     credit: null, // 'full', 'half', or null (any)
-    includeIndependentStudy: false,
     designations: [], // ['WRIT', 'COEX', 'DIAP']
     // Time filter - Set of strings like "Mon-10:00", "Mon-10:30", etc.
     timeBlocks: new Set(),
@@ -207,6 +282,7 @@ function App() {
 
   // Selected course for detail view
   const [selectedCourse, setSelectedCourse] = useState(null);
+  const [courseHistory, setCourseHistory] = useState([]);
 
   // Handle search submission
   const handleSearch = (e) => {
@@ -214,6 +290,7 @@ function App() {
     setActiveQuery(searchQuery.trim());
     setHasSearched(true);
     setSelectedCourse(null);
+    setCourseHistory([]);
   };
 
   // Rank by query, then filter by sidebar
@@ -231,12 +308,13 @@ function App() {
       results = results.filter(c => filters.formats.includes(c.format));
     }
     results = results.filter(c => c.time && !c.time.includes('TBA'));
-    if (filters.sizeCategory === 'small') {
-      results = results.filter(c => c.size <= 25);
-    } else if (filters.sizeCategory === 'medium') {
-      results = results.filter(c => c.size > 25 && c.size <= 80);
-    } else if (filters.sizeCategory === 'large') {
-      results = results.filter(c => c.size > 80);
+    if (filters.sizeCategories.length > 0 && filters.sizeCategories.length < 3) {
+      results = results.filter(c => {
+        if (filters.sizeCategories.includes('small') && c.size <= 25) return true;
+        if (filters.sizeCategories.includes('medium') && c.size > 25 && c.size <= 80) return true;
+        if (filters.sizeCategories.includes('large') && c.size > 80) return true;
+        return false;
+      });
     }
     if (filters.excludeGrad) {
       results = results.filter(c => c.level < 2000);
@@ -247,12 +325,9 @@ function App() {
     if (filters.credit) {
       results = results.filter(c => c.credit === filters.credit);
     }
-    if (!filters.includeIndependentStudy) {
-      results = results.filter(c => !c.isIndependentStudy);
-    }
     if (filters.designations.length > 0) {
       results = results.filter(c =>
-        filters.designations.every(d => c.designations.includes(d))
+        filters.designations.some(d => c.designations.includes(d))
       );
     }
     if (filters.timeBlocks.size > 0) {
@@ -260,6 +335,14 @@ function App() {
     }
 
     // Stage 3: Apply sort (relevance = keep ranking order from stage 1)
+    // When multiple designations are selected, sort by match count descending
+    if (filters.designations.length > 1 && sortOption === 'relevance') {
+      results.sort((a, b) => {
+        const countA = filters.designations.filter(d => a.designations.includes(d)).length;
+        const countB = filters.designations.filter(d => b.designations.includes(d)).length;
+        return countB - countA; // more matches first
+      });
+    }
     if (sortOption === 'code-asc') {
       results.sort(compareCourseCode);
     } else if (sortOption === 'code-desc') {
@@ -305,16 +388,15 @@ function App() {
     }));
   };
 
-  // Clear all filters
+  // Reset filters
   const clearFilters = () => {
     setFilters({
       departments: [],
       formats: [],
-      sizeCategory: null,
+      sizeCategories: [],
       excludeGrad: true,
       modality: null,
       credit: null,
-      includeIndependentStudy: false,
       designations: [],
       timeBlocks: new Set(),
     });
@@ -326,6 +408,7 @@ function App() {
     setActiveQuery('');
     setHasSearched(false);
     setSelectedCourse(null);
+    setCourseHistory([]);
     setSortOption('relevance');
     clearFilters();
   };
@@ -362,7 +445,7 @@ function App() {
                 className="w-full px-3 py-2 bg-cream-50 border border-cream-400 rounded text-sm text-left hover:border-warm-terracotta transition-colors flex items-center justify-between"
               >
                 <span className={filters.timeBlocks.size === 0 ? 'text-warm-brown/50' : 'text-warm-brownDark'}>
-                  {filters.timeBlocks.size === 0 ? 'Select times...' : `${filters.timeBlocks.size} blocks selected`}
+                  {filters.timeBlocks.size === 0 ? 'Select times...' : `${Math.round(filters.timeBlocks.size / 2)} slots selected`}
                 </span>
                 <svg className="w-4 h-4 text-warm-brown" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -388,26 +471,26 @@ function App() {
               )}
             </div>
 
-            {/* Format Filter */}
-            <MultiSelectFilter
-              title="Format"
-              options={formats}
-              selected={filters.formats}
-              onToggle={(format) => toggleArrayFilter('formats', format)}
-            />
-
             {/* Class Size Filter */}
             <FilterSection title="Class Size">
-              <select
-                value={filters.sizeCategory || ''}
-                onChange={(e) => updateFilter('sizeCategory', e.target.value || null)}
-                className="w-full px-3 py-2 bg-cream-50 border border-cream-400 rounded text-sm text-warm-brownDark focus:outline-none focus:ring-1 focus:ring-warm-terracotta"
-              >
-                <option value="">Any size</option>
-                <option value="small">Small (≤ 25)</option>
-                <option value="medium">Medium (26-80)</option>
-                <option value="large">Large (&gt; 80)</option>
-              </select>
+              <div className="flex rounded-lg overflow-hidden border border-cream-400">
+                {[
+                  { value: 'small', label: 'Small' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'large', label: 'Large' },
+                ].map(({ value, label }, i) => {
+                  const active = filters.sizeCategories.includes(value);
+                  return (
+                    <button
+                      key={value}
+                      onClick={() => toggleArrayFilter('sizeCategories', value)}
+                      className={`flex-1 py-1.5 text-xs font-medium transition-colors ${i > 0 ? 'border-l border-cream-400' : ''} ${active ? 'bg-warm-terracotta text-cream-50' : 'bg-cream-50 text-warm-brown hover:bg-cream-200'}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </FilterSection>
 
             {/* Exclude Grad Courses */}
@@ -469,17 +552,6 @@ function App() {
                     </select>
                   </FilterSection>
 
-                  {/* Include Independent Study */}
-                  <label className="flex items-center gap-2 text-sm text-warm-brownDark cursor-pointer hover:text-warm-terracotta">
-                    <input
-                      type="checkbox"
-                      checked={filters.includeIndependentStudy}
-                      onChange={(e) => updateFilter('includeIndependentStudy', e.target.checked)}
-                      className="rounded border-cream-400 text-warm-terracotta focus:ring-warm-terracotta"
-                    />
-                    Include independent study
-                  </label>
-
                   {/* Designations Filter */}
                   <MultiSelectFilter
                     title="Designations"
@@ -497,7 +569,7 @@ function App() {
               onClick={clearFilters}
               className="text-sm text-warm-brown hover:text-warm-terracotta transition-colors"
             >
-              Clear all filters
+              Reset filters
             </button>
           </div>
         )}
@@ -507,17 +579,37 @@ function App() {
       <main className="flex-1 flex min-w-0">
         {/* Center Panel */}
         <div className={`flex-1 p-6 overflow-y-auto ${state === 'detail' ? 'border-r border-cream-300' : ''}`}>
-          {/* Back button in detail view */}
+          {/* Back buttons in detail view */}
           {state === 'detail' && (
-            <button
-              onClick={() => setSelectedCourse(null)}
-              className="mb-4 text-sm text-warm-brown hover:text-warm-terracotta transition-colors flex items-center gap-1"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-              Back to results
-            </button>
+            <div className="mb-4 flex items-center gap-3">
+              <button
+                onClick={() => { setSelectedCourse(null); setCourseHistory([]); }}
+                className="text-sm text-warm-brown hover:text-warm-terracotta transition-colors flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7M18 19l-7-7 7-7" />
+                </svg>
+                All results
+              </button>
+              <span className="text-cream-400">|</span>
+              <button
+                onClick={() => {
+                  if (courseHistory.length > 0) {
+                    const prev = courseHistory[courseHistory.length - 1];
+                    setCourseHistory(h => h.slice(0, -1));
+                    setSelectedCourse(prev);
+                  } else {
+                    setSelectedCourse(null);
+                  }
+                }}
+                className="text-sm text-warm-brown hover:text-warm-terracotta transition-colors flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                {courseHistory.length > 0 ? 'Previous course' : 'Back to results'}
+              </button>
+            </div>
           )}
 
           {/* State 1: Home - Centered Search */}
@@ -594,7 +686,7 @@ function App() {
                   <CourseCard
                     key={course.id}
                     course={course}
-                    onClick={() => setSelectedCourse(course)}
+                    onClick={() => { setCourseHistory([]); setSelectedCourse(course); }}
                   />
                 ))}
                 {filteredCourses.length === 0 && (
@@ -623,27 +715,20 @@ function App() {
         {state === 'detail' && (
           <aside className="w-80 bg-cream-50 p-4 overflow-y-auto flex-shrink-0 no-scrollbar">
             <p className="text-sm text-warm-brown mb-3">
-              Other results ({filteredCourses.length - 1})
+              Other results ({Math.min(filteredCourses.filter(c => c.id !== selectedCourse.id).length, 12)})
             </p>
             <div className="space-y-2">
-              {pagedCourses
+              {filteredCourses
                 .filter(c => c.id !== selectedCourse.id)
+                .slice(0, 12)
                 .map(course => (
                   <CourseCardCompact
                     key={course.id}
                     course={course}
-                    onClick={() => setSelectedCourse(course)}
+                    onClick={() => { setCourseHistory(h => [...h, selectedCourse]); setSelectedCourse(course); }}
                   />
                 ))}
             </div>
-            {filteredCourses.length > 0 && (
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
-                compact
-              />
-            )}
           </aside>
         )}
       </main>
@@ -764,11 +849,13 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
     return { day: drag.day, minIdx, maxIdx };
   }
 
-  // Build block IDs for a range on a specific day
+  // Build block IDs for a range on a specific day (each hour slot expands to :00 + :30 for filtering)
   function rangeBlocks(day, minIdx, maxIdx) {
     const ids = [];
     for (let i = minIdx; i <= maxIdx; i++) {
-      ids.push(`${day}-${TIME_SLOTS[i]}`);
+      const hour = parseInt(TIME_SLOTS[i]);
+      ids.push(`${day}-${hour}:00`);
+      ids.push(`${day}-${hour}:30`);
     }
     return ids;
   }
@@ -798,7 +885,8 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
   const handleMouseDown = (day, timeIdx, e) => {
     e.preventDefault();
     e.stopPropagation();
-    const blockId = `${day}-${TIME_SLOTS[timeIdx]}`;
+    const hour = parseInt(TIME_SLOTS[timeIdx]);
+    const blockId = `${day}-${hour}:00`;
     const mode = blocks.has(blockId) ? 'deselect' : 'select';
     setDrag({ day, startIdx: timeIdx, currentIdx: timeIdx, mode, singleDay: false });
   };
@@ -845,9 +933,10 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
     };
   });
 
-  // Determine cell visual state
+  // Determine cell visual state (check :00 half to represent the full hour)
   function getCellState(day, timeIdx) {
-    const blockId = `${day}-${TIME_SLOTS[timeIdx]}`;
+    const hour = parseInt(TIME_SLOTS[timeIdx]);
+    const blockId = `${day}-${hour}:00`;
     const isCommitted = blocks.has(blockId);
 
     if (drag) {
@@ -871,7 +960,7 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
     <div
       ref={flyoutRef}
       className="fixed z-50 bg-cream-100 rounded-lg shadow-lg border border-cream-400 overflow-hidden"
-      style={{ width: '340px', top: pos.top, left: pos.left }}
+      style={{ width: '420px', top: pos.top, left: pos.left }}
     >
       {/* Header */}
       <div className="px-3 py-2 border-b border-cream-300 flex items-center justify-between bg-cream-200">
@@ -893,31 +982,29 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
           <div className="flex">
             <div className="w-10 flex-shrink-0" />
             {DAYS.map(day => (
-              <div key={day} className="w-14 text-center text-[11px] font-medium py-1 text-warm-terracotta">
+              <div key={day} className="w-[68px] text-center text-[11px] font-medium py-1 text-warm-terracotta">
                 {day}
               </div>
             ))}
           </div>
           {/* Group indicator bars — MWF connected, TTh connected */}
-          <div className="flex ml-10 mb-1 gap-px">
-            <div className="w-14 h-0.5 rounded-l-full bg-warm-terracotta/30" />
-            <div className="w-14 h-0.5 bg-warm-terracotta/10" />
-            <div className="w-14 h-0.5 bg-warm-terracotta/30" />
-            <div className="w-14 h-0.5 bg-warm-terracotta/10" />
-            <div className="w-14 h-0.5 rounded-r-full bg-warm-terracotta/30" />
+          <div className="flex ml-10 mb-1">
+            <div className="w-[68px] h-0.5 rounded-l-full bg-warm-terracotta/30" />
+            <div className="w-[68px] h-0.5 bg-warm-terracotta/10" />
+            <div className="w-[68px] h-0.5 bg-warm-terracotta/30" />
+            <div className="w-[68px] h-0.5 bg-warm-terracotta/10" />
+            <div className="w-[68px] h-0.5 rounded-r-full bg-warm-terracotta/30" />
           </div>
 
           {/* Time rows */}
           {TIME_SLOTS.map((time, timeIdx) => (
-            <div key={time} className="flex h-3">
-              {/* Time label on the hour */}
-              <div className="w-10 flex-shrink-0 text-right pr-1.5 text-warm-brown leading-none">
-                {time.endsWith(':00') && (
-                  <span className="text-[10px] -mt-0.5 block">
-                    {parseInt(time) <= 12 ? parseInt(time) : parseInt(time) - 12}
-                    {parseInt(time) < 12 ? 'a' : 'p'}
-                  </span>
-                )}
+            <div key={time} className="flex h-6">
+              {/* Time label */}
+              <div className="w-10 flex-shrink-0 text-right pr-1.5 text-warm-brown flex items-center justify-end">
+                <span className="text-[10px]">
+                  {parseInt(time) <= 12 ? parseInt(time) : parseInt(time) - 12}
+                  {parseInt(time) < 12 ? 'a' : 'p'}
+                </span>
               </div>
 
               {DAYS.map(day => {
@@ -935,7 +1022,7 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
                     key={`${day}-${time}`}
                     onMouseDown={(e) => handleMouseDown(day, timeIdx, e)}
                     onMouseEnter={() => handleMouseEnter(day, timeIdx)}
-                    className={`w-14 h-3 border-l border-r border-t border-cream-300 cursor-pointer select-none transition-colors ${timeIdx === TIME_SLOTS.length - 1 ? 'border-b' : ''} ${bg}`}
+                    className={`w-[68px] h-6 border-l border-r border-t border-cream-300 cursor-pointer select-none transition-colors ${timeIdx === TIME_SLOTS.length - 1 ? 'border-b' : ''} ${bg}`}
                   />
                 );
               })}
@@ -947,7 +1034,7 @@ function TimePickerFlyout({ anchorRef, selectedBlocks, onChange, onClose }) {
       {/* Footer */}
       <div className="px-3 py-2 border-t border-cream-300 flex items-center justify-between bg-cream-50">
         <span className="text-[11px] text-warm-brown">
-          {blocks.size === 0 ? 'Drag to select · Esc for single day' : `${blocks.size} blocks · Esc for single day`}
+          {blocks.size === 0 ? 'Drag to select · Esc for single day' : `${Math.round(blocks.size / 2)} slots · Esc for single day`}
         </span>
         <div className="flex gap-2">
           <button
@@ -1195,15 +1282,21 @@ function CourseCard({ course, onClick }) {
           <span className="text-sm font-medium text-warm-terracotta">{course.code}</span>
           <h3 className="text-lg font-medium text-warm-brownDark">{course.title}</h3>
         </div>
-        <span className="text-xs text-warm-brown bg-cream-200 px-2 py-1 rounded">
-          {course.format}
-        </span>
+        {course.designations?.length > 0 && (
+          <div className="flex gap-1 flex-shrink-0 ml-2">
+            {course.designations.map(d => (
+              <span key={d} className="text-xs text-warm-terracotta bg-warm-terracotta/10 px-2 py-0.5 rounded-full font-medium">
+                {d}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <p className="text-sm text-warm-brown line-clamp-2">{course.description}</p>
       <div className="mt-3 flex gap-4 text-xs text-warm-brown">
         <span>{course.instructor}</span>
         <span>{course.time}</span>
-        <span>{course.size} students</span>
+        {course.size != null && <span>{course.size} students</span>}
       </div>
     </div>
   );
@@ -1247,15 +1340,36 @@ function CourseDetail({ course }) {
           <span className="text-warm-brown">Schedule</span>
           <p className="text-warm-brownDark font-medium">{course.time}</p>
         </div>
+        {(course.enrolled != null || course.size != null) && (
         <div>
-          <span className="text-warm-brown">Format</span>
-          <p className="text-warm-brownDark font-medium">{course.format}</p>
+          <span className="text-warm-brown">Enrollment</span>
+          <div className="flex items-center gap-3 mt-1">
+            <p className="text-warm-brownDark font-medium">
+              {course.enrolled != null && course.size != null && course.enrolled !== course.size
+                ? `${course.enrolled}/${course.size} enrolled`
+                : `${course.enrolled ?? course.size} students`}
+            </p>
+            {course.enrolled != null && course.size != null && course.enrolled !== course.size && (
+            <div className="flex-1 max-w-32 h-2 bg-cream-300 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-warm-terracotta rounded-full"
+                style={{ width: `${(course.enrolled / course.size) * 100}%` }}
+              />
+            </div>
+            )}
+          </div>
         </div>
-        <div>
-          <span className="text-warm-brown">Credit</span>
-          <p className="text-warm-brownDark font-medium capitalize">{course.credit} credit</p>
-        </div>
+        )}
       </div>
+      {course.designations?.length > 0 && (
+        <div className="flex gap-1.5 mb-6">
+          {course.designations.map(d => (
+            <span key={d} className="text-xs text-warm-terracotta bg-warm-terracotta/10 px-2.5 py-1 rounded-full font-medium">
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Description */}
       <section className="mb-6">
@@ -1282,19 +1396,15 @@ function CourseDetail({ course }) {
 
         {advancedOpen && (
           <div className="mt-4 space-y-4 text-sm">
-            {/* Enrollment */}
+            {/* Credit Hours */}
+            {course.credit && (
             <div>
-              <span className="text-warm-brown">Enrollment</span>
-              <div className="flex items-center gap-3 mt-1">
-                <p className="text-warm-brownDark font-medium">{course.enrolled}/{course.size} enrolled</p>
-                <div className="flex-1 max-w-32 h-2 bg-cream-300 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-warm-terracotta rounded-full"
-                    style={{ width: `${(course.enrolled / course.size) * 100}%` }}
-                  />
-                </div>
-              </div>
+              <span className="text-warm-brown">Credit</span>
+              <p className="text-warm-brownDark font-medium mt-1">
+                {course.credit === 'full' ? 'Full credit (1.0)' : 'Half credit (0.5)'}
+              </p>
             </div>
+            )}
 
             {/* Links */}
             <div className="flex gap-6">
@@ -1336,13 +1446,14 @@ function CourseDetail({ course }) {
               <div>
                 <span className="text-warm-brown">Designations</span>
                 <div className="flex gap-2 mt-1">
-                  {course.designations.map(d => (
-                    <span key={d} className="px-2 py-1 bg-cream-300 text-warm-brownDark text-xs rounded">
-                      {d === 'WRIT' && 'WRIT (Writing)'}
-                      {d === 'COEX' && 'COEX (Community)'}
-                      {d === 'DIAP' && 'DIAP (Diversity)'}
-                    </span>
-                  ))}
+                  {course.designations.map(d => {
+                    const labels = { WRIT: 'Writing', COEX: 'Collaborative Scholarly Experiences', DIAP: 'Diversity', FYS: 'First Year Seminar', SOPH: 'Sophomore Seminar', CBLR: 'Community-Based Learning' };
+                    return (
+                      <span key={d} className="px-2 py-1 bg-cream-300 text-warm-brownDark text-xs rounded">
+                        {d}{labels[d] ? ` (${labels[d]})` : ''}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             )}
