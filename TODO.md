@@ -5,8 +5,7 @@
 - [ ] **Modality data** — all 1349 courses have missing modality info. Need to re-scrape or find a source for in-person / online / hybrid. Modality filter in sidebar is currently useless without this data.
 
 ## UX / Polish
-- [ ] **Sort arrow direction** — ↑ currently means descending (largest first), which is counterintuitive. Consider flipping or using labels instead.
-- [ ] **Duplicate sections** — some courses appear multiple times (e.g. ECON 1110 sections A/B). Could group or deduplicate.
+- [x] **Duplicate sections** — grouped same-title sections into one card with "N sections" badge; detail view shows all section times/instructors. Different-topic courses (e.g. AMST 0192T/U/V) stay separate.
 - [x] **"Clear all filters" re-checks "Exclude grad courses"** — renamed to "Reset filters" to clarify it resets to defaults.
 
 ## Performance
