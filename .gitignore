@@ -4,7 +4,6 @@ dist
 .env.*
 *.local
 .DS_Store
-src/data/courses.js
 src/data/courses_spring_2026.json
 src/data/courses_spring_2026_enriched.json
 src/data/courses_final.json
