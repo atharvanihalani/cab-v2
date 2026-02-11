@@ -122,6 +122,15 @@ function compareCourseCode(a, b) {
   return suffA.localeCompare(suffB);
 }
 
+// Compare by course number only (e.g. 0210), ignoring department
+function compareCourseNumber(a, b) {
+  const [deptA, numA, suffA] = parseCourseCode(a.code);
+  const [deptB, numB, suffB] = parseCourseCode(b.code);
+  if (numA !== numB) return numA - numB;
+  if (deptA !== deptB) return deptA.localeCompare(deptB);
+  return suffA.localeCompare(suffB);
+}
+
 // Tier 1: exact department or exact course code (flexible spacing)
 function matchesCourseCode(course, query) {
   const q = query.toLowerCase().replace(/\s+/g, '');
@@ -347,6 +356,10 @@ function App() {
       results.sort(compareCourseCode);
     } else if (sortOption === 'code-desc') {
       results.sort((a, b) => compareCourseCode(b, a));
+    } else if (sortOption === 'number-asc') {
+      results.sort(compareCourseNumber);
+    } else if (sortOption === 'number-desc') {
+      results.sort((a, b) => compareCourseNumber(b, a));
     } else if (sortOption === 'size-asc') {
       results.sort((a, b) => a.size - b.size);
     } else if (sortOption === 'size-desc') {
@@ -671,6 +684,13 @@ function App() {
                     className={`px-0.5 transition-colors ${sortOption.startsWith('code') ? 'text-warm-brownDark font-medium border-b-[1.5px] border-warm-brownDark' : 'text-warm-brown/70 hover:text-warm-terracotta border-b border-dashed border-transparent hover:border-warm-terracotta'}`}
                   >
                     Code {sortOption === 'code-asc' ? '↓' : sortOption === 'code-desc' ? '↑' : ''}
+                  </button>
+                  <span className="text-cream-400 mx-0.5">·</span>
+                  <button
+                    onClick={() => setSortOption(prev => prev === 'number-desc' ? 'number-asc' : 'number-desc')}
+                    className={`px-0.5 transition-colors ${sortOption.startsWith('number') ? 'text-warm-brownDark font-medium border-b-[1.5px] border-warm-brownDark' : 'text-warm-brown/70 hover:text-warm-terracotta border-b border-dashed border-transparent hover:border-warm-terracotta'}`}
+                  >
+                    Number {sortOption === 'number-asc' ? '↓' : sortOption === 'number-desc' ? '↑' : ''}
                   </button>
                   <span className="text-cream-400 mx-0.5">·</span>
                   <button
