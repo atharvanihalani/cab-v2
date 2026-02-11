@@ -6,6 +6,9 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Lora', 'Georgia', 'serif'],
+      },
       colors: {
         cream: {
           50: '#FEFDFB',

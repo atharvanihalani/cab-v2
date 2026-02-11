@@ -419,7 +419,7 @@ function App() {
   return (
     <div className="h-screen bg-cream-100 flex overflow-hidden">
       {/* Left Sidebar - Filters */}
-      <aside className="w-72 bg-cream-200 border-r border-cream-400 p-5 flex-shrink-0 overflow-y-auto z-10">
+      <aside className="w-72 bg-cream-200 border-r border-cream-400 px-5 py-6 flex-shrink-0 overflow-y-auto z-10">
         <h1
           className="text-xl font-semibold text-warm-brownDark mb-6 cursor-pointer hover:text-warm-terracotta transition-colors"
           onClick={goHome}
@@ -428,7 +428,7 @@ function App() {
         </h1>
 
         {hasSearched && (
-          <div className="space-y-6">
+          <div className="space-y-7">
             {/* Department Filter */}
             <DepartmentFilter
               departments={departments}
@@ -578,7 +578,7 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 flex min-w-0">
         {/* Center Panel */}
-        <div className={`flex-1 p-6 overflow-y-auto ${state === 'detail' ? 'border-r border-cream-300' : ''}`}>
+        <div className={`flex-1 px-8 py-6 overflow-y-auto ${state === 'detail' ? 'border-r border-cream-300' : ''}`}>
           {/* Back buttons in detail view */}
           {state === 'detail' && (
             <div className="mb-4 flex items-center gap-3">

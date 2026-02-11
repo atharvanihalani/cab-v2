@@ -13,3 +13,4 @@ scripts/scrape_cab.py
 .vercel
 .playwright-mcp
 qa/
+font-mockups
