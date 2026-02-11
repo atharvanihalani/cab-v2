@@ -246,6 +246,25 @@ function rankCoursesByQuery(allCourses, query) {
   return [...tier1, ...tier2, ...tier3a, ...tier3b, ...tier4a, ...tier4b, ...tier5, ...tier6];
 }
 
+// Group courses with the same base code and title (true duplicate sections)
+function groupCourses(courses) {
+  const groups = new Map();
+  const order = [];
+  for (const course of courses) {
+    const baseCode = course.code.replace(/[A-Z]$/, '');
+    const key = `${baseCode}|||${course.title}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key).push(course);
+  }
+  return order.map(key => {
+    const sections = groups.get(key);
+    return { primary: sections[0], sections };
+  });
+}
+
 function App() {
   const PAGE_SIZE = 12;
   // Search state
@@ -356,7 +375,9 @@ function App() {
     return results;
   }, [hasSearched, activeQuery, filters, sortOption]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredCourses.length / PAGE_SIZE));
+  const groupedResults = useMemo(() => groupCourses(filteredCourses), [filteredCourses]);
+
+  const totalPages = Math.max(1, Math.ceil(groupedResults.length / PAGE_SIZE));
 
   useEffect(() => {
     setCurrentPage(1);
@@ -368,10 +389,10 @@ function App() {
     }
   }, [currentPage, totalPages]);
 
-  const pagedCourses = useMemo(() => {
+  const pagedGroups = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
-    return filteredCourses.slice(start, start + PAGE_SIZE);
-  }, [currentPage, filteredCourses, PAGE_SIZE]);
+    return groupedResults.slice(start, start + PAGE_SIZE);
+  }, [currentPage, groupedResults, PAGE_SIZE]);
 
   // Update a single filter
   const updateFilter = (key, value) => {
@@ -655,7 +676,7 @@ function App() {
               />
               <div className="flex items-center justify-between mt-4 mb-4">
                 <p className="text-sm text-warm-brown">
-                  {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''} found
+                  {groupedResults.length} course{groupedResults.length !== 1 ? 's' : ''} found
                 </p>
                 <div className="flex items-center gap-1 text-sm">
                   <span className="text-warm-brown/70">Sort by</span>
@@ -682,11 +703,12 @@ function App() {
                 </div>
               </div>
               <div className="space-y-3">
-                {pagedCourses.map(course => (
+                {pagedGroups.map(group => (
                   <CourseCard
-                    key={course.id}
-                    course={course}
-                    onClick={() => { setCourseHistory([]); setSelectedCourse(course); }}
+                    key={group.primary.id}
+                    course={group.primary}
+                    sectionCount={group.sections.length}
+                    onClick={() => { setCourseHistory([]); setSelectedCourse(group.primary); }}
                   />
                 ))}
                 {filteredCourses.length === 0 && (
@@ -707,7 +729,10 @@ function App() {
 
           {/* State 3: Detail View */}
           {state === 'detail' && (
-            <CourseDetail course={selectedCourse} />
+            <CourseDetail
+              course={selectedCourse}
+              sections={(groupedResults.find(g => g.primary.id === selectedCourse.id)?.sections) || [selectedCourse]}
+            />
           )}
         </div>
 
@@ -715,17 +740,18 @@ function App() {
         {state === 'detail' && (
           <aside className="w-80 bg-cream-50 p-4 overflow-y-auto flex-shrink-0 no-scrollbar">
             <p className="text-sm text-warm-brown mb-3">
-              Other results ({Math.min(filteredCourses.filter(c => c.id !== selectedCourse.id).length, 12)})
+              Other results ({Math.min(groupedResults.filter(g => g.primary.id !== selectedCourse.id).length, 12)})
             </p>
             <div className="space-y-2">
-              {filteredCourses
-                .filter(c => c.id !== selectedCourse.id)
+              {groupedResults
+                .filter(g => g.primary.id !== selectedCourse.id)
                 .slice(0, 12)
-                .map(course => (
+                .map(group => (
                   <CourseCardCompact
-                    key={course.id}
-                    course={course}
-                    onClick={() => { setCourseHistory(h => [...h, selectedCourse]); setSelectedCourse(course); }}
+                    key={group.primary.id}
+                    course={group.primary}
+                    sectionCount={group.sections.length}
+                    onClick={() => { setCourseHistory(h => [...h, selectedCourse]); setSelectedCourse(group.primary); }}
                   />
                 ))}
             </div>
@@ -1271,7 +1297,7 @@ function MultiSelectFilter({ title, options, optionLabels, selected, onToggle })
 }
 
 // Course Card Component (for results list)
-function CourseCard({ course, onClick }) {
+function CourseCard({ course, onClick, sectionCount }) {
   return (
     <div
       onClick={onClick}
@@ -1282,15 +1308,18 @@ function CourseCard({ course, onClick }) {
           <span className="text-sm font-medium text-warm-terracotta">{course.code}</span>
           <h3 className="text-lg font-medium text-warm-brownDark">{course.title}</h3>
         </div>
-        {course.designations?.length > 0 && (
-          <div className="flex gap-1 flex-shrink-0 ml-2">
-            {course.designations.map(d => (
-              <span key={d} className="text-xs text-warm-terracotta bg-warm-terracotta/10 px-2 py-0.5 rounded-full font-medium">
-                {d}
-              </span>
-            ))}
-          </div>
-        )}
+        <div className="flex gap-1 flex-shrink-0 ml-2">
+          {sectionCount > 1 && (
+            <span className="text-xs text-warm-brown bg-cream-200 px-2 py-0.5 rounded-full">
+              {sectionCount} sections
+            </span>
+          )}
+          {course.designations?.length > 0 && course.designations.map(d => (
+            <span key={d} className="text-xs text-warm-terracotta bg-warm-terracotta/10 px-2 py-0.5 rounded-full font-medium">
+              {d}
+            </span>
+          ))}
+        </div>
       </div>
       <p className="text-sm text-warm-brown line-clamp-2">{course.description}</p>
       <div className="mt-3 flex gap-4 text-xs text-warm-brown">
@@ -1303,13 +1332,20 @@ function CourseCard({ course, onClick }) {
 }
 
 // Compact Course Card Component (for right sidebar)
-function CourseCardCompact({ course, onClick }) {
+function CourseCardCompact({ course, onClick, sectionCount }) {
   return (
     <div
       onClick={onClick}
       className="bg-cream-100 border border-cream-300 rounded p-3 cursor-pointer hover:border-warm-terracotta transition-colors"
     >
-      <span className="text-xs font-medium text-warm-terracotta">{course.code}</span>
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-medium text-warm-terracotta">{course.code}</span>
+        {sectionCount > 1 && (
+          <span className="text-[10px] text-warm-brown bg-cream-200 px-1.5 py-0.5 rounded-full">
+            {sectionCount}s
+          </span>
+        )}
+      </div>
       <h4 className="text-sm font-medium text-warm-brownDark leading-tight">{course.title}</h4>
       <p className="text-xs text-warm-brown mt-1">{course.time}</p>
     </div>
@@ -1317,8 +1353,9 @@ function CourseCardCompact({ course, onClick }) {
 }
 
 // Course Detail Component
-function CourseDetail({ course }) {
+function CourseDetail({ course, sections }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const hasMultipleSections = sections && sections.length > 1;
 
   return (
     <div className="max-w-3xl">
@@ -1328,18 +1365,23 @@ function CourseDetail({ course }) {
       <div className="flex flex-wrap gap-2 mb-6">
         <Tag label={course.department} />
         {course.modality !== 'in-person' && <Tag label={course.modality} />}
+        {hasMultipleSections && <Tag label={`${sections.length} sections`} />}
       </div>
 
       {/* Info Grid */}
       <div className="grid grid-cols-2 gap-x-8 gap-y-3 mb-6 text-sm">
+        {!hasMultipleSections && (
         <div>
           <span className="text-warm-brown">Instructor</span>
           <p className="text-warm-brownDark font-medium">{course.instructor}</p>
         </div>
+        )}
+        {!hasMultipleSections && (
         <div>
           <span className="text-warm-brown">Schedule</span>
           <p className="text-warm-brownDark font-medium">{course.time}</p>
         </div>
+        )}
         {(course.enrolled != null || course.size != null) && (
         <div>
           <span className="text-warm-brown">Enrollment</span>
@@ -1369,6 +1411,22 @@ function CourseDetail({ course }) {
             </span>
           ))}
         </div>
+      )}
+
+      {/* Sections list for multi-section courses */}
+      {hasMultipleSections && (
+        <section className="mb-6">
+          <h3 className="text-sm font-medium text-warm-brownDark mb-2">Sections</h3>
+          <div className="space-y-1.5">
+            {sections.map((s, i) => (
+              <div key={s.id} className="flex items-center gap-4 text-sm py-2 px-3 bg-cream-200 rounded">
+                <span className="font-medium text-warm-brownDark w-10 flex-shrink-0">{s.section || `#${i + 1}`}</span>
+                <span className="text-warm-brown flex-1">{s.time}</span>
+                <span className="text-warm-brown">{s.instructor}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* Description */}
