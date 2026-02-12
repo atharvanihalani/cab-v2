@@ -427,7 +427,6 @@ function App() {
           Explore@Brown
         </h1>
 
-        {hasSearched && (
           <div className="space-y-7">
             {/* Department Filter */}
             <DepartmentFilter
@@ -572,7 +571,6 @@ function App() {
               Reset filters
             </button>
           </div>
-        )}
       </aside>
 
       {/* Main Content */}
